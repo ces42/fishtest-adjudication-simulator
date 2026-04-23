@@ -1,11 +1,15 @@
 #include <cassert>
 #include <stdfloat>
 #include <iostream>
-#include <fstream>
 #include <vector>
 #include <string>
 #include <cstdio>
 #include <charconv>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <cstring>
 
 // #include "fast_double_parser.h"
 // #include "fast_float_t.h"
@@ -116,11 +120,36 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::ifstream file(argv[1]);
-    if (!file.is_open()) {
-        std::cerr << "Error: Could not open file " << argv[1] << "\n";
+    // 1. Open the file using low-level POSIX open()
+    int fd = open(argv[1], O_RDONLY);
+    if (fd == -1) {
+        std::cerr << "Error: Could not open file\n";
         return 1;
     }
+
+    // 2. Get the exact size of the file
+    struct stat sb;
+    if (fstat(fd, &sb) == -1) {
+        std::cerr << "Error: Could not get file size\n";
+        close(fd);
+        return 1;
+    }
+
+    // 3. Memory-map the file
+    // PROT_READ means we only want to read. MAP_PRIVATE means changes aren't written to disk.
+    const char* file_data = static_cast<const char*>(mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0));
+    if (file_data == MAP_FAILED) {
+        std::cerr << "Error: mmap failed: " << errno << std::endl;
+        close(fd);
+        return 1;
+    }
+    madvise((void*)file_data, sb.st_size, MADV_SEQUENTIAL);
+
+    // 4. We can safely close the file descriptor now; the mapping remains active
+    close(fd);
+
+    const char* cursor = file_data;
+    const char* end_ptr = file_data + sb.st_size;
 
     std::vector<GameData> games;
     games.reserve(100);
@@ -130,14 +159,24 @@ int main(int argc, char* argv[]) {
     int len;
 
     // read the file delimited by header lines
-    while (std::getline(file, line, '[')) {
-        std::string_view line_view = line;
+    // while (std::getline(file, line, '[')) {
+    while (cursor < end_ptr) {
+        const char* next_bracket = static_cast<const char*>(memchr(cursor + 1, '[', end_ptr - cursor - 1));
+        if (!next_bracket) {
+            next_bracket = end_ptr;
+        }
+
+        // Create a string_view representing this specific block of the file
+        size_t length = next_bracket - cursor;
+        std::string_view line(cursor + 1, length);
+        cursor = next_bracket;
+
         // // Detect the start of a new game
         // if (line[0] == '[') {
         size_t pos;
         // If the current game has data, save it before starting a new one
-        if (line_view.starts_with("Result \"")) {
-            std::string res_str = line.substr(8, 4);
+        if (line.starts_with("Result \"")) {
+            std::string_view res_str = line.substr(8, 4);
             if (res_str == "1-0\"") {
                 currentGame->result = GameResult::WhiteWin;
             } else if (res_str == "0-1\"") {
@@ -148,9 +187,9 @@ int main(int argc, char* argv[]) {
                 currentGame->result = GameResult::Unknown;
             }
 
-        } else if (line_view.starts_with("Termination \"")) {
+        } else if (line.starts_with("Termination \"")) {
             size_t end = line.find('"', 13);
-            std::string_view res_str = line_view.substr(13, end - 13);
+            std::string_view res_str = line.substr(13, end - 13);
             if (res_str == "adjudication")
                 currentGame->term = GameTerm::Adj;
             else if (res_str == "normal")
@@ -160,17 +199,17 @@ int main(int argc, char* argv[]) {
             else
                 currentGame->term = GameTerm::Other;
 
-        } else if (line_view.starts_with("PlyCount \"")) {
+        } else if (line.starts_with("PlyCount \"")) {
             size_t end = line.find('"', 10);
-            std::from_chars(line_view.data() + 10, line_view.data() + end, len);
+            std::from_chars(line.data() + 10, line.data() + end, len);
             currentGame->scores.reserve(len);
             currentGame->times.reserve(len);
         // } else if (line.substr(0, 13) == "TimeControl \"") {
             // the last line of the header is always TimeControl
-        } else if ((pos = line.find("\n\n")) != std::string::npos) {
+        } else if ((pos = line.find("\n\n")) != std::string_view::npos) {
 
             // Search for comments wrapped in '{' and '}'
-            while ((pos = line.find('{', pos)) != std::string::npos) {
+            while ((pos = line.find('{', pos)) != std::string_view::npos) {
 
                 // // Fast format extraction: matches "<score>/<depth> <time>s"
                 // if (std::sscanf(comment.c_str(), "%f/%d %fs", &score, &depth, &time) == 3) {
@@ -187,7 +226,7 @@ int main(int argc, char* argv[]) {
                 //     else
                 //         assert(false);
                 // }
-                int16_t score = fixed_signed_stoi(line.c_str() + pos + 1, 2);
+                int16_t score = fixed_signed_stoi(line.data() + pos + 1, 2);
                 assert(end + 1 > pos);
                 pos = end + 1; // "/"
 
@@ -200,7 +239,7 @@ int main(int argc, char* argv[]) {
                 end = line.find('s', pos);
                 // end = pos + 5;
                 // float_t time = parse_f(line, pos, end);
-                int time = fixed_unsigned_stoi(line.c_str() + pos, 3);
+                int time = fixed_unsigned_stoi(line.data() + pos, 3);
                 pos = end + 6; // "s} __ "
                 currentGame->scores.push_back(score);
                 currentGame->times.push_back(time);
@@ -211,9 +250,6 @@ int main(int argc, char* argv[]) {
     }
 
     games.pop_back();
-
-    // Push the final game to the vector after EOF
-    file.close();
 
     // --- Output results to verify extraction ---
     std::cout << "Parsed " << games.size() << " games.\n\n";
@@ -232,5 +268,6 @@ int main(int argc, char* argv[]) {
         std::cout << "\n";
     }
 
+    munmap((void*)file_data, sb.st_size);
     return 0;
 }
