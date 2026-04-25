@@ -258,7 +258,10 @@ int main(int argc, char* argv[]) {
             // Search for comments wrapped in '{' and '}'
             while ((pos = line.find('{', pos)) != std::string_view::npos) {
 
-                size_t end = line.find('/', pos+1);
+                size_t end;
+                // end = line.find('/', pos+1);
+                for (end = pos+1; line[end] != '/'; ++end);
+
                 // size_t end = pos + 1 + 5;
                 // auto [succ, score] = try_parse_f(line, pos+1, end);
                 // if (!succ) [[unlikely]] {
@@ -273,13 +276,17 @@ int main(int argc, char* argv[]) {
                 assert(end + 1 > pos);
                 pos = end + 1; // "/"
 
-                end = line.find(' ', pos);
+                // end = line.find(' ', pos);
+                for (end = pos; line[end] != ' '; ++end);
+
                 // int depth = std::stoi(line.substr(pos, end - pos));
                 // int depth;
                 // std::from_chars(line.c_str() + pos, line.c_str() + end, depth);
                 pos = end + 1; // " "
 
-                end = line.find('s', pos);
+                // end = line.find('s', pos);
+                for (end = pos; line[end] != 's'; ++end);
+
                 // end = pos + 5;
                 // float_t time = parse_f(line, pos, end);
                 uint time = fixed_unsigned_stoi(line.data() + pos, 3);
