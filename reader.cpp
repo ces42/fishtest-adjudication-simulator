@@ -202,20 +202,20 @@ int main(int argc, char* argv[]) {
         cursor = next_bracket;
 
         size_t pos;
-        if (line.starts_with("TimeControl \"")) {
+        if (line[0] == 'T' && line.starts_with("TimeControl \"")) {
             float tc;
             size_t end = line.find('+', 13);
             std::from_chars(line.data() + 13, line.data() + end, tc);
             q = 60.0 / tc;
             qq = int(1024 * q);
         }
-        if (line.starts_with("White \"")) {
+        if (line[0] == 'W' && line.starts_with("White \"")) {
             if (line.substr(7, 4) == "New-") {
                 currentGame->white_is_new = true;
             } else {
                 currentGame->white_is_new = false;
             }
-        } else if (line.starts_with("Result \"")) {
+        } else if (line[0] == 'R' && line.starts_with("Result \"")) {
             std::string_view res_str = line.substr(8, 4);
             if (res_str == "1-0\"") {
                 currentGame->result = GameResult::WhiteWin;
@@ -227,7 +227,7 @@ int main(int argc, char* argv[]) {
                 assert(false);
             }
 
-        } else if (line.starts_with("Termination \"")) {
+        } else if (line[0] == 'T' && line.starts_with("Termination \"")) {
             size_t end = line.find('"', 13);
             std::string_view res_str = line.substr(13, end - 13);
             if (res_str == "adjudication")
@@ -239,7 +239,7 @@ int main(int argc, char* argv[]) {
             else
                 currentGame->term = GameTerm::Other;
 
-        } else if (line.starts_with("PlyCount \"")) {
+        } else if (line[0] == 'P' && line.starts_with("PlyCount \"")) {
             size_t end = line.find('"', 10);
             std::from_chars(line.data() + 10, line.data() + end, len);
             currentGame->scores.reserve(len);
