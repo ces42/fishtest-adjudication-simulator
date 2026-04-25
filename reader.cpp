@@ -348,7 +348,7 @@ int main(int argc, char* argv[]) {
             // assert(currentGame->data.size() == len);
             currentGame = &games.emplace_back();
         }
-        // cursor = cursor + 1 /* `line` start here */ + pos;
+        cursor = cursor + 1 /* `line` start here */ + pos;
     }
 
     games.pop_back();
