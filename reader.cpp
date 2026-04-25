@@ -191,7 +191,7 @@ int main(int argc, char* argv[]) {
     // read the file delimited by header lines
     // while (std::getline(file, line, '[')) {
     while (cursor < end_ptr) {
-        const char* next_bracket = (const char*)(memchr(cursor + 1, '[', end_ptr - cursor - 1));
+        const char* next_bracket = (const char*)memchr(cursor + 1, '[', end_ptr - cursor - 1);
         if (!next_bracket) {
             next_bracket = end_ptr;
         }
@@ -245,7 +245,6 @@ int main(int argc, char* argv[]) {
             currentGame->scores.reserve(len);
             currentGame->times.reserve(len);
         } else if ((pos = line.find("\n\n")) != std::string_view::npos) {
-            pos = line.find("\n\n");
             bool white_to_move = !(line.substr(pos + 2 + 2, 2) == "..");
             int sign = white_to_move ? 1 : -1;
             uint cumtime = 0;
