@@ -158,7 +158,7 @@ int main(int argc, char* argv[]) {
         close(fd);
         return 1;
     }
-    madvise((void*)file_data, sb.st_size, MADV_SEQUENTIAL);
+    madvise((void*)file_data, sb.st_size, MADV_SEQUENTIAL | MADV_HUGEPAGE);
 
     // 4. We can safely close the file descriptor now; the mapping remains active
     close(fd);
@@ -247,8 +247,8 @@ int main(int argc, char* argv[]) {
             size_t end = line.find('"', 10);
             cursor += 10;
             std::from_chars(line.data() + 10, line.data() + end, len);
-            currentGame->scores.reserve(len);
-            currentGame->times.reserve(len);
+            // currentGame->scores.reserve(len);
+            // currentGame->times.reserve(len);
         } else if ((pos = line.find("\n\n")) != std::string_view::npos) {
             bool white_to_move = !(line.substr(pos + 2 + 2, 2) == "..");
             int sign = white_to_move ? 1 : -1;
