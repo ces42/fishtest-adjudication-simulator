@@ -11,18 +11,20 @@
 #include <unistd.h>
 #include <cstring>
 
+#include "npy.hpp"
+
 // #include "fast_double_parser.h"
 // #include "fast_float_t.h"
 
 // Enum to represent the outcome of the game
-enum GameResult {
+enum GameResult : uint8_t {
     WhiteWin,  // 1-0
     BlackWin,  // 0-1
     Draw,      // 1/2-1/2
     Unknown    // * or unparsed
 };
 
-enum GameTerm {
+enum GameTerm : uint8_t {
     Adj,
     Normal,
     Time,
@@ -33,18 +35,18 @@ using float_t = float;
 
 // Structure to hold data for a single game
 struct GameData {
-    GameResult result = GameResult::Unknown;
-    GameTerm term = GameTerm::Other;
     std::vector<int16_t> scores;
     std::vector<int> times;
+    GameResult result = GameResult::Unknown;
+    GameTerm term = GameTerm::Other;
 };
 
 // Helper function to convert the enum back to a string for display
 std::string resultToString(GameResult res) {
     switch (res) {
-        case GameResult::WhiteWin: return "1-0 (White Win)";
-        case GameResult::BlackWin: return "0-1 (Black Win)";
-        case GameResult::Draw:     return "1/2-1/2 (Draw)";
+        case GameResult::WhiteWin: return "1-0";
+        case GameResult::BlackWin: return "0-1";
+        case GameResult::Draw:     return "1/2-1/2";
         default:                   return "* (Unknown)";
     }
 }
@@ -77,12 +79,12 @@ inline float_t parse_f(const std::string& str, size_t start, size_t end) {
 inline int fixed_unsigned_stoi(const char * str, int decimals = 3) {
     int val = 0;
     while (*str != '.') {
-        assert(*str - '0' >= 0);
+        // assert(*str - '0' >= 0);
         val = val * 10 + (*str++ - '0');
     }
     ++str;
     for (int j = 0; j < decimals; ++j) {
-        assert(*str - '0' >= 0);
+        // assert(*str - '0' >= 0);
         val = val * 10 + (*str++ - '0');
     }
     return val;
@@ -102,12 +104,12 @@ inline int16_t fixed_signed_stoi(const char * str, int decimals = 2) {
     }
     int16_t val = 0;
     while (*str != '.') {
-        assert(*str - '0' >= 0);
+        // assert(*str - '0' >= 0);
         val = val * 10 + (*str++ - '0');
     }
     ++str;
     for (int j = 0; j < decimals; ++j) {
-        assert(*str - '0' >= 0);
+        // assert(*str - '0' >= 0);
         val = val * 10 + (*str++ - '0');
     }
     return sign * val;
@@ -157,6 +159,8 @@ int main(int argc, char* argv[]) {
     // GameData currentGame = GameData();
     std::string line;
     int len;
+    float q;
+    int min_len = 999999;
 
     // read the file delimited by header lines
     // while (std::getline(file, line, '[')) {
@@ -174,7 +178,12 @@ int main(int argc, char* argv[]) {
         // // Detect the start of a new game
         // if (line[0] == '[') {
         size_t pos;
-        // If the current game has data, save it before starting a new one
+        if (line.starts_with("TimeControl \"")) {
+            float tc;
+            size_t end = line.find('+', 13);
+            std::from_chars(line.data() + 13, line.data() + end, tc);
+            q = 60 / tc;
+        }
         if (line.starts_with("Result \"")) {
             std::string_view res_str = line.substr(8, 4);
             if (res_str == "1-0\"") {
@@ -204,9 +213,9 @@ int main(int argc, char* argv[]) {
             std::from_chars(line.data() + 10, line.data() + end, len);
             currentGame->scores.reserve(len);
             currentGame->times.reserve(len);
-        // } else if (line.substr(0, 13) == "TimeControl \"") {
-            // the last line of the header is always TimeControl
         } else if ((pos = line.find("\n\n")) != std::string_view::npos) {
+            pos = line.find("\n\n");
+            int cumtime = 0;
 
             // Search for comments wrapped in '{' and '}'
             while ((pos = line.find('{', pos)) != std::string_view::npos) {
@@ -240,9 +249,16 @@ int main(int argc, char* argv[]) {
                 // end = pos + 5;
                 // float_t time = parse_f(line, pos, end);
                 int time = fixed_unsigned_stoi(line.data() + pos, 3);
+                cumtime += int(time * q);
                 pos = end + 6; // "s} __ "
                 currentGame->scores.push_back(score);
-                currentGame->times.push_back(time);
+                currentGame->times.push_back(cumtime);
+            }
+            min_len = std::min(min_len, (int) currentGame->times.size());
+            if (currentGame->times.size() < 10)
+            {
+                std::cout << "???\n";
+                std::cout << line << std::endl;
             }
             // assert(currentGame->data.size() == len);
             currentGame = &games.emplace_back();
@@ -262,11 +278,13 @@ int main(int argc, char* argv[]) {
         // Print the first few extractions as a sanity check
         int display_count = games[i].scores.size();
         for (int j = std::max(0, display_count - 20); j < display_count; ++j) {
-            std::cout << "  " << (j % 2 ? -1 : 1) * games[i].scores[j] << "  " << games[i].times[j] << "\n";
-                      // << ", " << games[i].evals[j].time << "s;";
+            std::cout << "  " << j << "  " <<
+                (j % 2 ? -1 : 1) * games[i].scores[j] << "  " <<
+                games[i].times[j] << "\n";
         }
         std::cout << "\n";
     }
+    std::cout << "shortest game: " << min_len << "moves\n";
 
     munmap((void*)file_data, sb.st_size);
     return 0;
