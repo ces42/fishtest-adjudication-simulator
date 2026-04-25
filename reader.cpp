@@ -191,7 +191,7 @@ int main(int argc, char* argv[]) {
     // read the file delimited by header lines
     // while (std::getline(file, line, '[')) {
     while (cursor < end_ptr) {
-        const char* next_bracket = static_cast<const char*>(memchr(cursor + 1, '[', end_ptr - cursor - 1));
+        const char* next_bracket = (const char*)(memchr(cursor + 1, '[', end_ptr - cursor - 1));
         if (!next_bracket) {
             next_bracket = end_ptr;
         }
@@ -215,8 +215,7 @@ int main(int argc, char* argv[]) {
             } else {
                 currentGame->white_is_new = false;
             }
-        }
-        if (line.starts_with("Result \"")) {
+        } else if (line.starts_with("Result \"")) {
             std::string_view res_str = line.substr(8, 4);
             if (res_str == "1-0\"") {
                 currentGame->result = GameResult::WhiteWin;
@@ -350,6 +349,7 @@ int main(int argc, char* argv[]) {
             // assert(currentGame->data.size() == len);
             currentGame = &games.emplace_back();
         }
+        // cursor = cursor + 1 /* `line` start here */ + pos;
     }
 
     games.pop_back();
