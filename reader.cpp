@@ -205,11 +205,13 @@ int main(int argc, char* argv[]) {
         if (line[0] == 'T' && line.starts_with("TimeControl \"")) {
             float tc;
             size_t end = line.find('+', 13);
+            cursor += 13;
             std::from_chars(line.data() + 13, line.data() + end, tc);
             q = 60.0 / tc;
             qq = int(1024 * q);
         }
         if (line[0] == 'W' && line.starts_with("White \"")) {
+            cursor += 11;
             if (line.substr(7, 4) == "New-") {
                 currentGame->white_is_new = true;
             } else {
@@ -217,6 +219,7 @@ int main(int argc, char* argv[]) {
             }
         } else if (line[0] == 'R' && line.starts_with("Result \"")) {
             std::string_view res_str = line.substr(8, 4);
+            cursor += 12;
             if (res_str == "1-0\"") {
                 currentGame->result = GameResult::WhiteWin;
             } else if (res_str == "0-1\"") {
@@ -230,6 +233,7 @@ int main(int argc, char* argv[]) {
         } else if (line[0] == 'T' && line.starts_with("Termination \"")) {
             size_t end = line.find('"', 13);
             std::string_view res_str = line.substr(13, end - 13);
+            cursor += 13;
             if (res_str == "adjudication")
                 currentGame->term = GameTerm::Adj;
             else if (res_str == "normal")
@@ -241,6 +245,7 @@ int main(int argc, char* argv[]) {
 
         } else if (line[0] == 'P' && line.starts_with("PlyCount \"")) {
             size_t end = line.find('"', 10);
+            cursor += 10;
             std::from_chars(line.data() + 10, line.data() + end, len);
             currentGame->scores.reserve(len);
             currentGame->times.reserve(len);
@@ -260,7 +265,9 @@ int main(int argc, char* argv[]) {
 
                 size_t end;
                 // end = line.find('/', pos+1);
-                for (end = pos+1; line[end] != '/'; ++end);
+                // line[pos] is {
+                // the shortest possible score is a single-digit mate score, it has length 3
+                for (end = pos+1 + 3; line[end] != '/'; ++end);
 
                 // size_t end = pos + 1 + 5;
                 // auto [succ, score] = try_parse_f(line, pos+1, end);
@@ -277,7 +284,8 @@ int main(int argc, char* argv[]) {
                 pos = end + 1; // "/"
 
                 // end = line.find(' ', pos);
-                for (end = pos; line[end] != ' '; ++end);
+                // depth is at least one digit
+                for (end = pos + 1; line[end] != ' '; ++end);
 
                 // int depth = std::stoi(line.substr(pos, end - pos));
                 // int depth;
@@ -285,7 +293,8 @@ int main(int argc, char* argv[]) {
                 pos = end + 1; // " "
 
                 // end = line.find('s', pos);
-                for (end = pos; line[end] != 's'; ++end);
+                // time is at least 5 digits
+                for (end = pos + 5; line[end] != 's'; ++end);
 
                 // end = pos + 5;
                 // float_t time = parse_f(line, pos, end);
