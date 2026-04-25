@@ -42,6 +42,7 @@ struct GameData {
     GameTerm term = GameTerm::Other;
     GameResult alt_result = GameResult::Unknown;
     int early_time = -1;
+    bool white_is_new = true;
 };
 
 // Helper function to convert the enum back to a string for display
@@ -49,6 +50,15 @@ std::string res2str(GameResult res) {
     switch (res) {
         case GameResult::WhiteWin: return "1-0";
         case GameResult::BlackWin: return "0-1";
+        case GameResult::Draw:     return "draw";
+        default:                   return "NONE";
+    }
+}
+
+std::string res2str_nb(GameResult res) {
+    switch (res) {
+        case GameResult::WhiteWin: return "new";
+        case GameResult::BlackWin: return "base";
         case GameResult::Draw:     return "draw";
         default:                   return "NONE";
     }
@@ -174,6 +184,7 @@ int main(int argc, char* argv[]) {
     int win_len  = std::stoi(argv[5]);
 
     int64_t error_matrix[3][3] = { 0 };
+    int64_t new_base_matrix[3][3] = { 0 };
 
     // read the file delimited by header lines
     // while (std::getline(file, line, '[')) {
@@ -194,6 +205,13 @@ int main(int argc, char* argv[]) {
             size_t end = line.find('+', 13);
             std::from_chars(line.data() + 13, line.data() + end, tc);
             q = 60 / tc;
+        }
+        if (line.starts_with("White \"")) {
+            if (line.substr(7, 4) == "New-") {
+                currentGame->white_is_new = true;
+            } else {
+                currentGame->white_is_new = false;
+            }
         }
         if (line.starts_with("Result \"")) {
             std::string_view res_str = line.substr(8, 4);
@@ -301,12 +319,29 @@ int main(int argc, char* argv[]) {
             }
             if (alt_result != Unknown) {
                 error_matrix[currentGame->result][alt_result]++;
+
+                int actual_nb = currentGame->result;
+                int alt_nb = alt_result;
+                if (!currentGame->white_is_new) {
+                    if (actual_nb == WhiteWin) actual_nb = BlackWin;
+                    else if (actual_nb == BlackWin) actual_nb = WhiteWin;
+                    if (alt_nb == WhiteWin) alt_nb = BlackWin;
+                    else if (alt_nb == BlackWin) alt_nb = WhiteWin;
+                }
+                new_base_matrix[actual_nb][alt_nb]++;
+
                 if (alt_result != currentGame->result) {
                     mispredicts++;
                 }
                 savings += int((cumtime - currentGame->early_time) * q);
             } else {
                 error_matrix[currentGame->result][currentGame->result]++;
+                int actual_nb = currentGame->result;
+                if (!currentGame->white_is_new) {
+                    if (actual_nb == WhiteWin) actual_nb = BlackWin;
+                    else if (actual_nb == BlackWin) actual_nb = WhiteWin;
+                }
+                new_base_matrix[actual_nb][actual_nb]++;
             }
             tot_time += cumtime;
             // assert(currentGame->data.size() == len);
@@ -360,7 +395,24 @@ int main(int argc, char* argv[]) {
         std::cout << std::left << std::setw(8) << res2str(GameResult(i));
         int64_t tot = row[0] + row[1] + row[2];
         for (int64_t& e : row)
-            std::cout << "  " << std::setw(8) << e * 1.0 / tot * 100;
+            std::cout << "  " << std::setw(8) << (tot ? e * 1.0 / tot * 100 : 0.0);
+        std::cout << std::endl;
+        ++i;
+    }
+
+    std::cout << "\nNew vs Base matrix:\n";
+    std::cout << std::left << std::setw(8) << "actual";
+    for (int res = 0; res < 3; ++res)
+        std::cout << "  " << std::left << std::setw(8) << res2str_nb(GameResult(res));
+    std::printf("\n");
+    std::cout << "----------------------------------------";
+    std::printf("\n");
+    i = 0;
+    for (auto& row : new_base_matrix) {
+        std::cout << std::left << std::setw(8) << res2str_nb(GameResult(i));
+        int64_t tot = row[0] + row[1] + row[2];
+        for (int64_t& e : row)
+            std::cout << "  " << std::setw(8) << (tot ? e * 1.0 / tot * 100 : 0.0);
         std::cout << std::endl;
         ++i;
     }
