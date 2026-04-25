@@ -37,7 +37,7 @@ using float_t = float;
 // Structure to hold data for a single game
 struct GameData {
     std::vector<int16_t> scores;
-    std::vector<int> times;
+    std::vector<uint> times;
     GameResult result = GameResult::Unknown;
     GameTerm term = GameTerm::Other;
     GameResult alt_result = GameResult::Unknown;
@@ -73,17 +73,17 @@ std::string termToString(GameTerm term) {
     }
 }
 
-inline std::pair<bool, float_t> try_parse_f(const std::string& str, size_t start, size_t end) {
+inline std::pair<bool, float_t> try_parse_f(const std::string_view& str, size_t start, size_t end) {
     float_t ret;
     // __attribute__((assume(end - start < 10)));
-    auto res = std::from_chars(str.c_str() + start + (str[start] == '+'),
-                               str.c_str() + end, ret,
+    auto res = std::from_chars(str.data() + start + (str[start] == '+'),
+                               str.data() + end, ret,
                                std::chars_format::fixed);
     // assert(res.ptr == str.c_str() + end);
     return {res.ec == std::errc(), ret};
 }
 
-inline float_t parse_f(const std::string& str, size_t start, size_t end) {
+inline float_t parse_f(const std::string_view& str, size_t start, size_t end) {
     auto [succ, res] = try_parse_f(str, start, end);
     // assert(succ);
     return res;
@@ -173,10 +173,12 @@ int main(int argc, char* argv[]) {
     std::string line;
     int len;
     float q;
+    constexpr uint TIME_QUANT_SCALE = 1024;
+    uint qq;
     // int min_len = 999999;
     int mispredicts = 0;
-    int64_t savings = 0;
-    int64_t tot_time = 0;
+    uint64_t savings = 0;
+    uint64_t tot_time = 0;
 
     int draw_th  = std::stoi(argv[2]);
     int draw_len = std::stoi(argv[3]);
@@ -204,7 +206,8 @@ int main(int argc, char* argv[]) {
             float tc;
             size_t end = line.find('+', 13);
             std::from_chars(line.data() + 13, line.data() + end, tc);
-            q = 60 / tc;
+            q = 60.0 / tc;
+            qq = int(1024 * q);
         }
         if (line.starts_with("White \"")) {
             if (line.substr(7, 4) == "New-") {
@@ -246,7 +249,7 @@ int main(int argc, char* argv[]) {
             pos = line.find("\n\n");
             bool white_to_move = !(line.substr(pos + 2 + 2, 2) == "..");
             int sign = white_to_move ? 1 : -1;
-            int cumtime = 0;
+            uint cumtime = 0;
 
             int draw_plies = 0;
             int win_plies = 0;
@@ -281,18 +284,18 @@ int main(int argc, char* argv[]) {
                 end = line.find('s', pos);
                 // end = pos + 5;
                 // float_t time = parse_f(line, pos, end);
-                int time = fixed_unsigned_stoi(line.data() + pos, 3);
-                cumtime += int(time * q);
+                uint time = fixed_unsigned_stoi(line.data() + pos, 3);
+                cumtime += time * qq;
                 pos = end + 6; // "s} __ "
-                currentGame->scores.push_back(score);
-                currentGame->times.push_back(cumtime);
+                // currentGame->scores.push_back(score);
+                // currentGame->times.push_back(cumtime / TIME_QUANT_SCALE);
 
                 if (alt_result == Unknown) {
                     if (score * sign >= win_th) {
                         win_plies += 1;
                         if (win_plies >= win_len) {
                             alt_result = WhiteWin;
-                            currentGame->early_time = cumtime;
+                            currentGame->early_time = cumtime / TIME_QUANT_SCALE;
                         }
                     } else
                         win_plies = 0;
@@ -301,7 +304,7 @@ int main(int argc, char* argv[]) {
                         lose_plies += 1;
                         if (lose_plies >= win_len) {
                             alt_result = BlackWin;
-                            currentGame->early_time = cumtime;
+                            currentGame->early_time = cumtime / TIME_QUANT_SCALE;
                         }
                     } else
                         lose_plies = 0;
@@ -310,7 +313,7 @@ int main(int argc, char* argv[]) {
                         draw_plies += 1;
                         if (draw_plies >= draw_len) {
                             alt_result = Draw;
-                            currentGame->early_time = cumtime;
+                            currentGame->early_time = cumtime / TIME_QUANT_SCALE;
                         }
                     } else
                         draw_plies = 0;
@@ -333,7 +336,7 @@ int main(int argc, char* argv[]) {
                 if (alt_result != currentGame->result) {
                     mispredicts++;
                 }
-                savings += int((cumtime - currentGame->early_time) * q);
+                savings += cumtime / TIME_QUANT_SCALE - currentGame->early_time;
             } else {
                 error_matrix[currentGame->result][currentGame->result]++;
                 int actual_nb = currentGame->result;
@@ -343,7 +346,7 @@ int main(int argc, char* argv[]) {
                 }
                 new_base_matrix[actual_nb][actual_nb]++;
             }
-            tot_time += cumtime;
+            tot_time += cumtime / TIME_QUANT_SCALE;
             // assert(currentGame->data.size() == len);
             currentGame = &games.emplace_back();
         }
@@ -376,11 +379,11 @@ int main(int argc, char* argv[]) {
 
     double save_per = double(savings) / 1000.0 / games.size();
     double avg_game_dur = double(tot_time) / 1000.0 / games.size();
-    std::cout << "Parsed " << games.size() << " games.\n\n";
+    std::cout << "Parsed " << games.size() << " games.\n";
+    std::cout << "avg game duration : " << avg_game_dur << "s\n\n";
     std::cout << "mispredicts: " << mispredicts << "   " << mispredicts * 100.0 / games.size() << "%\n";
-    std::cout << "time saved: " << save_per << "s per game  " << 
+    std::cout << "avg time saved: " << save_per << "s  " << 
         save_per / avg_game_dur * 100.0 << "%\n";
-    std::cout << "avg game: " << avg_game_dur << "s per game\n";
     // std::cout << "shortest game: " << min_len << "moves\n";
 
     std::cout << std::endl << std::left << std::setw(8) << "actual";
