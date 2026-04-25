@@ -10,6 +10,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <cstring>
+#include <iomanip>
 
 #include "npy.hpp"
 
@@ -19,8 +20,8 @@
 // Enum to represent the outcome of the game
 enum GameResult : uint8_t {
     WhiteWin,  // 1-0
-    BlackWin,  // 0-1
     Draw,      // 1/2-1/2
+    BlackWin,  // 0-1
     Unknown    // * or unparsed
 };
 
@@ -39,15 +40,17 @@ struct GameData {
     std::vector<int> times;
     GameResult result = GameResult::Unknown;
     GameTerm term = GameTerm::Other;
+    GameResult alt_result = GameResult::Unknown;
+    int early_time = -1;
 };
 
 // Helper function to convert the enum back to a string for display
-std::string resultToString(GameResult res) {
+std::string res2str(GameResult res) {
     switch (res) {
         case GameResult::WhiteWin: return "1-0";
         case GameResult::BlackWin: return "0-1";
-        case GameResult::Draw:     return "1/2-1/2";
-        default:                   return "* (Unknown)";
+        case GameResult::Draw:     return "draw";
+        default:                   return "NONE";
     }
 }
 
@@ -117,8 +120,8 @@ inline int16_t fixed_signed_stoi(const char * str, int decimals = 2) {
 
 int main(int argc, char* argv[]) {
 
-    if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " <filename.pgn>\n";
+    if (argc < 6) {
+        std::cerr << "Usage: " << argv[0] << " <filename.pgn> <draw threshold> <draw plies> <resign threshold> <resign plies>\n";
         return 1;
     }
 
@@ -160,7 +163,17 @@ int main(int argc, char* argv[]) {
     std::string line;
     int len;
     float q;
-    int min_len = 999999;
+    // int min_len = 999999;
+    int mispredicts = 0;
+    int64_t savings = 0;
+    int64_t tot_time = 0;
+
+    int draw_th  = std::stoi(argv[2]);
+    int draw_len = std::stoi(argv[3]);
+    int win_th   = std::stoi(argv[4]);
+    int win_len  = std::stoi(argv[5]);
+
+    int64_t error_matrix[3][3] = { 0 };
 
     // read the file delimited by header lines
     // while (std::getline(file, line, '[')) {
@@ -175,8 +188,6 @@ int main(int argc, char* argv[]) {
         std::string_view line(cursor + 1, length);
         cursor = next_bracket;
 
-        // // Detect the start of a new game
-        // if (line[0] == '[') {
         size_t pos;
         if (line.starts_with("TimeControl \"")) {
             float tc;
@@ -193,7 +204,7 @@ int main(int argc, char* argv[]) {
             } else if (res_str == "1/2-") {
                 currentGame->result = GameResult::Draw;
             } else {
-                currentGame->result = GameResult::Unknown;
+                assert(false);
             }
 
         } else if (line.starts_with("Termination \"")) {
@@ -215,15 +226,19 @@ int main(int argc, char* argv[]) {
             currentGame->times.reserve(len);
         } else if ((pos = line.find("\n\n")) != std::string_view::npos) {
             pos = line.find("\n\n");
+            bool white_to_move = !(line.substr(pos + 2 + 2, 2) == "..");
+            int sign = white_to_move ? 1 : -1;
             int cumtime = 0;
+
+            int draw_plies = 0;
+            int win_plies = 0;
+            int lose_plies = 0;
+
+            GameResult& alt_result = currentGame->alt_result;
 
             // Search for comments wrapped in '{' and '}'
             while ((pos = line.find('{', pos)) != std::string_view::npos) {
 
-                // // Fast format extraction: matches "<score>/<depth> <time>s"
-                // if (std::sscanf(comment.c_str(), "%f/%d %fs", &score, &depth, &time) == 3) {
-                //     currentGame->evals.push_back({score, time});
-                // }
                 size_t end = line.find('/', pos+1);
                 // size_t end = pos + 1 + 5;
                 // auto [succ, score] = try_parse_f(line, pos+1, end);
@@ -253,13 +268,47 @@ int main(int argc, char* argv[]) {
                 pos = end + 6; // "s} __ "
                 currentGame->scores.push_back(score);
                 currentGame->times.push_back(cumtime);
+
+                if (alt_result == Unknown) {
+                    if (score * sign >= win_th) {
+                        win_plies += 1;
+                        if (win_plies >= win_len) {
+                            alt_result = WhiteWin;
+                            currentGame->early_time = cumtime;
+                        }
+                    } else
+                        win_plies = 0;
+
+                    if (score * sign <= -win_th) {
+                        lose_plies += 1;
+                        if (lose_plies >= win_len) {
+                            alt_result = BlackWin;
+                            currentGame->early_time = cumtime;
+                        }
+                    } else
+                        lose_plies = 0;
+
+                    if (std::abs(score) <= draw_th) {
+                        draw_plies += 1;
+                        if (draw_plies >= draw_len) {
+                            alt_result = Draw;
+                            currentGame->early_time = cumtime;
+                        }
+                    } else
+                        draw_plies = 0;
+                }
+                sign *= (-1);
             }
-            min_len = std::min(min_len, (int) currentGame->times.size());
-            if (currentGame->times.size() < 10)
-            {
-                std::cout << "???\n";
-                std::cout << line << std::endl;
+            if (alt_result != Unknown) {
+                error_matrix[currentGame->result][alt_result]++;
+                if (alt_result != currentGame->result) {
+                    mispredicts++;
+                }
+                savings += int((cumtime - currentGame->early_time) * q);
+            } else {
+                error_matrix[currentGame->result][currentGame->result]++;
             }
+            tot_time += cumtime;
             // assert(currentGame->data.size() == len);
             currentGame = &games.emplace_back();
         }
@@ -268,23 +317,54 @@ int main(int argc, char* argv[]) {
     games.pop_back();
 
     // --- Output results to verify extraction ---
-    std::cout << "Parsed " << games.size() << " games.\n\n";
-    for (size_t i = 0; i < std::min(games.size(), 20UL); ++i) {
-        std::cout << "Game " << (i + 1)
-                  << " | Result: " << resultToString(games[i].result) 
-                  << " | Termination: " << termToString(games[i].term) 
-                  << " | Total Moves Extracted: " << games[i].scores.size() << "\n";
+    // for (size_t i = 0; i < std::min(games.size(), 10UL); ++i) {
+    //     std::cout << "Game " << (i + 1)
+    //               << " | Result: " << res2str(games[i].result) 
+    //               << " | alt result: " << res2str(games[i].alt_result) 
+    //               << " | at time: " << games[i].early_time 
+    //               << " | Termination: " << termToString(games[i].term) 
+    //               << "\n";
+    //               // << " | Total Moves Extracted: " << games[i].scores.size() << "\n";
+    //
+    //     // Print the first few extractions as a sanity check
+    //     int display_count = games[i].scores.size();
+    //     for (int j = std::max(0, display_count - 20); j < display_count; ++j) {
+    //         std::cout << "  " << j << "  " <<
+    //             (j % 2 ? -1 : 1) * games[i].scores[j] << "  " <<
+    //             games[i].times[j] << "\n";
+    //     }
+    //     std::cout << "\n";
+    // }
+    std::cout << "Draw: " << draw_th << ", " << draw_len << "\n";
+    std::cout << "Win: " << win_th << ", " << win_len << "\n";
 
-        // Print the first few extractions as a sanity check
-        int display_count = games[i].scores.size();
-        for (int j = std::max(0, display_count - 20); j < display_count; ++j) {
-            std::cout << "  " << j << "  " <<
-                (j % 2 ? -1 : 1) * games[i].scores[j] << "  " <<
-                games[i].times[j] << "\n";
-        }
-        std::cout << "\n";
+
+    double save_per = double(savings) / 1000.0 / games.size();
+    double avg_game_dur = double(tot_time) / 1000.0 / games.size();
+    std::cout << "Parsed " << games.size() << " games.\n\n";
+    std::cout << "mispredicts: " << mispredicts << "   " << mispredicts * 100.0 / games.size() << "%\n";
+    std::cout << "time saved: " << save_per << "s per game  " << 
+        save_per / avg_game_dur * 100.0 << "%\n";
+    std::cout << "avg game: " << avg_game_dur << "s per game\n";
+    // std::cout << "shortest game: " << min_len << "moves\n";
+
+    std::cout << std::endl << std::left << std::setw(8) << "actual";
+    for (int res = 0; res < 3; ++res)
+        std::cout << "  " << std::left << std::setw(8) << res2str(GameResult(res));
+    std::printf("\n");
+    std::cout << "----------------------------------------";
+    std::printf("\n");
+    std::cout << std::setprecision(3);
+    int i = 0;
+    for (auto& row : error_matrix) {
+        std::cout << std::left << std::setw(8) << res2str(GameResult(i));
+        int64_t tot = row[0] + row[1] + row[2];
+        for (int64_t& e : row)
+            std::cout << "  " << std::setw(8) << e * 1.0 / tot * 100;
+        std::cout << std::endl;
+        ++i;
     }
-    std::cout << "shortest game: " << min_len << "moves\n";
+
 
     munmap((void*)file_data, sb.st_size);
     return 0;
