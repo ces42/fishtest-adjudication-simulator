@@ -10,9 +10,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <cstring>
+#include <cstdint>
 #include <iomanip>
-
-#include "npy.hpp"
 
 // #include "fast_double_parser.h"
 // #include "fast_float_t.h"
@@ -128,6 +127,8 @@ inline int16_t fixed_signed_stoi(const char * str, int decimals = 2) {
     return sign * val;
 }
 
+constexpr bool TRACK_MOVES = false;
+
 int main(int argc, char* argv[]) {
 
     if (argc < 6) {
@@ -164,16 +165,18 @@ int main(int argc, char* argv[]) {
     close(fd);
 
     const char* cursor = file_data;
-    const char* end_ptr = file_data + sb.st_size;
+    const char* const end_ptr = file_data + sb.st_size;
+    auto stream_find = [&end_ptr] (const char * ptr, char c) {
+        return (const char*) memchr(ptr, c, end_ptr - ptr);
+    };
 
     std::vector<GameData> games;
     games.reserve(100);
     GameData* currentGame = &games.emplace_back();
     // GameData currentGame = GameData();
-    std::string line;
     int len;
     float q;
-    constexpr uint TIME_QUANT_SCALE = 1024;
+    constexpr uint TIME_QUANT = 1024;
     uint qq;
     // int min_len = 999999;
     int mispredicts = 0;
@@ -188,69 +191,74 @@ int main(int argc, char* argv[]) {
     int64_t error_matrix[3][3] = { 0 };
     int64_t new_base_matrix[3][3] = { 0 };
 
+    bool seen_header = false;
     // read the file delimited by header lines
     // while (std::getline(file, line, '[')) {
     while (cursor < end_ptr) {
-        const char* next_bracket = (const char*)memchr(cursor + 1, '[', end_ptr - cursor - 1);
-        if (!next_bracket) {
-            next_bracket = end_ptr;
-        }
 
         // Create a string_view representing this specific block of the file
-        size_t length = next_bracket - cursor;
-        std::string_view line(cursor + 1, length);
-        cursor = next_bracket;
+        // std::string_view line(cursor + 1, length);
 
-        size_t pos;
-        if (line[0] == 'T' && line.starts_with("TimeControl \"")) {
-            float tc;
-            size_t end = line.find('+', 13);
-            cursor += 13;
-            std::from_chars(line.data() + 13, line.data() + end, tc);
-            q = 60.0 / tc;
-            qq = int(1024 * q);
-        }
-        if (line[0] == 'W' && line.starts_with("White \"")) {
-            cursor += 11;
-            if (line.substr(7, 4) == "New-") {
-                currentGame->white_is_new = true;
-            } else {
-                currentGame->white_is_new = false;
+        if (*cursor == '[') {
+            seen_header = true;
+            cursor++;
+            std::string_view str(cursor, std::min(4096L, end_ptr - cursor - 1));
+            if (str[0] == 'T' && str.starts_with("TimeControl \"")) {
+                float tc;
+                size_t end = str.find('+', 13);
+                cursor += 13;
+                std::from_chars(str.data() + 13, str.data() + end, tc);
+                q = 60.0 / tc;
+                qq = int(TIME_QUANT * q);
+            } else if (str[0] == 'W' && str.starts_with("White \"")) {
+                cursor += 11;
+                if (str.substr(7, 4) == "New-") {
+                    currentGame->white_is_new = true;
+                } else {
+                    currentGame->white_is_new = false;
+                }
+            } else if (str[0] == 'R' && str.starts_with("Result \"")) {
+                std::string_view res_str = str.substr(8, 4);
+                cursor += 12;
+                if (res_str == "1-0\"") {
+                    currentGame->result = GameResult::WhiteWin;
+                } else if (res_str == "0-1\"") {
+                    currentGame->result = GameResult::BlackWin;
+                } else if (res_str == "1/2-") {
+                    currentGame->result = GameResult::Draw;
+                } else {
+                    assert(false);
+                }
+
+            } else if (str[0] == 'T' && str.starts_with("Termination \"")) {
+                size_t end = str.find('"', 13);
+                std::string_view res_str = str.substr(13, end - 13);
+                cursor += 13;
+                if (res_str == "adjudication")
+                    currentGame->term = GameTerm::Adj;
+                else if (res_str == "normal")
+                    currentGame->term = GameTerm::Normal;
+                else if (res_str == "time forfeit")
+                    currentGame->term = GameTerm::Time;
+                else
+                    currentGame->term = GameTerm::Other;
+
+            } else if (str[0] == 'P' && str.starts_with("PlyCount \"")) {
+                size_t end = str.find('"', 10);
+                cursor += 10;
+                std::from_chars(str.data() + 10, str.data() + end, len);
+                if constexpr (TRACK_MOVES) {
+                    currentGame->scores.reserve(len);
+                    currentGame->times.reserve(len);
+                }
             }
-        } else if (line[0] == 'R' && line.starts_with("Result \"")) {
-            std::string_view res_str = line.substr(8, 4);
-            cursor += 12;
-            if (res_str == "1-0\"") {
-                currentGame->result = GameResult::WhiteWin;
-            } else if (res_str == "0-1\"") {
-                currentGame->result = GameResult::BlackWin;
-            } else if (res_str == "1/2-") {
-                currentGame->result = GameResult::Draw;
-            } else {
-                assert(false);
-            }
-
-        } else if (line[0] == 'T' && line.starts_with("Termination \"")) {
-            size_t end = line.find('"', 13);
-            std::string_view res_str = line.substr(13, end - 13);
-            cursor += 13;
-            if (res_str == "adjudication")
-                currentGame->term = GameTerm::Adj;
-            else if (res_str == "normal")
-                currentGame->term = GameTerm::Normal;
-            else if (res_str == "time forfeit")
-                currentGame->term = GameTerm::Time;
-            else
-                currentGame->term = GameTerm::Other;
-
-        } else if (line[0] == 'P' && line.starts_with("PlyCount \"")) {
-            size_t end = line.find('"', 10);
-            cursor += 10;
-            std::from_chars(line.data() + 10, line.data() + end, len);
-            // currentGame->scores.reserve(len);
-            // currentGame->times.reserve(len);
-        } else if ((pos = line.find("\n\n")) != std::string_view::npos) {
-            bool white_to_move = !(line.substr(pos + 2 + 2, 2) == "..");
+            cursor = stream_find(cursor, '\n') + 1;
+        } else if (seen_header && *cursor == '\n') {
+            cursor++;
+            // size_t pos = 0;
+            // std::string_view str(cursor+1, std::min(1024 * 1024L, end_ptr - cursor - 1));
+            // std::cout << std::string_view(cursor+1, size_t(10)) << std::endl;
+            bool white_to_move = !(std::string_view(cursor + 2, 2) == "..");
             int sign = white_to_move ? 1 : -1;
             uint cumtime = 0;
 
@@ -261,13 +269,13 @@ int main(int argc, char* argv[]) {
             GameResult& alt_result = currentGame->alt_result;
 
             // Search for comments wrapped in '{' and '}'
-            while ((pos = line.find('{', pos)) != std::string_view::npos) {
-
-                size_t end;
-                // end = line.find('/', pos+1);
-                // line[pos] is {
+            // pos = str.find('{', pos);
+            cursor = stream_find(cursor, '{') + 1;
+            while (true) {
+            parse_moves_loop:
                 // the shortest possible score is a single-digit mate score, it has length 3
-                for (end = pos+1 + 3; line[end] != '/'; ++end);
+                const char * end;
+                for (end = cursor + 3; *end != '/'; ++end);
 
                 // size_t end = pos + 1 + 5;
                 // auto [succ, score] = try_parse_f(line, pos+1, end);
@@ -279,37 +287,38 @@ int main(int argc, char* argv[]) {
                 //     else
                 //         assert(false);
                 // }
-                int16_t score = fixed_signed_stoi(line.data() + pos + 1, 2);
-                assert(end + 1 > pos);
-                pos = end + 1; // "/"
+                int16_t score = fixed_signed_stoi(cursor, 2);
+                cursor = end + 1; // +1 to move past "/"
 
-                // end = line.find(' ', pos);
-                // depth is at least one digit
-                for (end = pos + 1; line[end] != ' '; ++end);
+                // +1 because depth is at least one digit
+                for (end = cursor + 1; *end != ' '; ++end);
 
                 // int depth = std::stoi(line.substr(pos, end - pos));
                 // int depth;
                 // std::from_chars(line.c_str() + pos, line.c_str() + end, depth);
-                pos = end + 1; // " "
+                cursor = end + 1; // +1 to move past " "
 
                 // end = line.find('s', pos);
                 // time is at least 5 digits
-                for (end = pos + 5; line[end] != 's'; ++end);
+                for (end = cursor + 5; *end != 's'; ++end);
 
                 // end = pos + 5;
                 // float_t time = parse_f(line, pos, end);
-                uint time = fixed_unsigned_stoi(line.data() + pos, 3);
+                uint time = fixed_unsigned_stoi(cursor, 3);
                 cumtime += time * qq;
-                pos = end + 6; // "s} __ "
-                // currentGame->scores.push_back(score);
-                // currentGame->times.push_back(cumtime / TIME_QUANT_SCALE);
+                cursor = end + 6; // "s} __ "; cursor might point past the end of the file now
+                // std::cout << "> after time: " << std::string_view(end, 6) << "#\n";
+                if constexpr (TRACK_MOVES) {
+                    currentGame->scores.push_back(score);
+                    currentGame->times.push_back(cumtime / TIME_QUANT);
+                }
 
                 if (alt_result == Unknown) {
                     if (score * sign >= win_th) {
                         win_plies += 1;
                         if (win_plies >= win_len) {
                             alt_result = WhiteWin;
-                            currentGame->early_time = cumtime / TIME_QUANT_SCALE;
+                            currentGame->early_time = cumtime / TIME_QUANT;
                         }
                     } else
                         win_plies = 0;
@@ -318,7 +327,7 @@ int main(int argc, char* argv[]) {
                         lose_plies += 1;
                         if (lose_plies >= win_len) {
                             alt_result = BlackWin;
-                            currentGame->early_time = cumtime / TIME_QUANT_SCALE;
+                            currentGame->early_time = cumtime / TIME_QUANT;
                         }
                     } else
                         lose_plies = 0;
@@ -327,13 +336,30 @@ int main(int argc, char* argv[]) {
                         draw_plies += 1;
                         if (draw_plies >= draw_len) {
                             alt_result = Draw;
-                            currentGame->early_time = cumtime / TIME_QUANT_SCALE;
+                            currentGame->early_time = cumtime / TIME_QUANT;
                         }
                     } else
                         draw_plies = 0;
                 }
                 sign *= (-1);
+
+                // seek until next comment, or until we encounter the header for the next game
+                // std::cout << "> seeking: ";
+                for (; cursor < end_ptr; ++cursor) {
+                    if (*cursor == '{') {
+                        cursor++;
+                        // std::cout << std::endl;
+                        goto parse_moves_loop;
+                    }
+                    if (*cursor == '[')
+                    {
+                        goto game_end;
+                    }
+                    // std::cout << *cursor;
+                }
+                goto game_end;
             }
+        game_end:
             if (alt_result != Unknown) {
                 error_matrix[currentGame->result][alt_result]++;
 
@@ -350,8 +376,9 @@ int main(int argc, char* argv[]) {
                 if (alt_result != currentGame->result) {
                     mispredicts++;
                 }
-                savings += cumtime / TIME_QUANT_SCALE - currentGame->early_time;
+                savings += cumtime / TIME_QUANT - currentGame->early_time;
             } else {
+                // std::cout << "hereXX" << currentGame->result << alt_result << "\n";
                 error_matrix[currentGame->result][currentGame->result]++;
                 int actual_nb = currentGame->result;
                 if (!currentGame->white_is_new) {
@@ -360,34 +387,36 @@ int main(int argc, char* argv[]) {
                 }
                 new_base_matrix[actual_nb][actual_nb]++;
             }
-            tot_time += cumtime / TIME_QUANT_SCALE;
+            tot_time += cumtime / TIME_QUANT;
             // assert(currentGame->data.size() == len);
             currentGame = &games.emplace_back();
+            seen_header = false;
         }
-        cursor = cursor + 1 /* `line` start here */ + pos;
     }
 
     games.pop_back();
 
-    // --- Output results to verify extraction ---
-    // for (size_t i = 0; i < std::min(games.size(), 10UL); ++i) {
-    //     std::cout << "Game " << (i + 1)
-    //               << " | Result: " << res2str(games[i].result) 
-    //               << " | alt result: " << res2str(games[i].alt_result) 
-    //               << " | at time: " << games[i].early_time 
-    //               << " | Termination: " << termToString(games[i].term) 
-    //               << "\n";
-    //               // << " | Total Moves Extracted: " << games[i].scores.size() << "\n";
-    //
-    //     // Print the first few extractions as a sanity check
-    //     int display_count = games[i].scores.size();
-    //     for (int j = std::max(0, display_count - 20); j < display_count; ++j) {
-    //         std::cout << "  " << j << "  " <<
-    //             (j % 2 ? -1 : 1) * games[i].scores[j] << "  " <<
-    //             games[i].times[j] << "\n";
-    //     }
-    //     std::cout << "\n";
-    // }
+    if constexpr (TRACK_MOVES)
+    {
+        for (size_t i = 0; i < std::min(games.size(), 10UL); ++i) {
+            std::cout << "Game " << (i + 1)
+                      << " | Result: " << res2str(games[i].result) 
+                      << " | alt result: " << res2str(games[i].alt_result) 
+                      << " | at time: " << games[i].early_time 
+                      << " | Termination: " << termToString(games[i].term) 
+                      << "\n";
+                      // << " | Total Moves Extracted: " << games[i].scores.size() << "\n";
+
+            // Print the first few extractions as a sanity check
+            int display_count = games[i].scores.size();
+            for (int j = std::max(0, display_count - 20); j < display_count; ++j) {
+                std::cout << "  " << j << "  " <<
+                    (j % 2 ? -1 : 1) * games[i].scores[j] << "  " <<
+                    games[i].times[j] / 1000.0 << "\n";
+            }
+            std::cout << "\n";
+        }
+    }
     std::cout << "Draw: " << draw_th << ", " << draw_len << "\n";
     std::cout << "Win: " << win_th << ", " << win_len << "\n";
 
