@@ -12,6 +12,7 @@
 #include <cstring>
 #include <cstdint>
 #include <iomanip>
+#include <numeric>
 
 // #include "fast_double_parser.h"
 // #include "fast_float_t.h"
@@ -40,8 +41,9 @@ struct GameData {
     GameResult result = GameResult::Unknown;
     GameTerm term = GameTerm::Other;
     GameResult alt_result = GameResult::Unknown;
-    int early_time = -1;
     bool white_is_new = true;
+    int early_time = -1;
+    int plyCount;
 };
 
 // Helper function to convert the enum back to a string for display
@@ -189,7 +191,7 @@ int main(int argc, char* argv[]) {
     int win_len  = std::stoi(argv[5]);
 
     int64_t error_matrix[3][3] = { 0 };
-    int64_t new_base_matrix[3][3] = { 0 };
+    int64_t match_matrix[3][3] = { 0 };
 
     bool seen_header = false;
     // read the file delimited by header lines
@@ -200,7 +202,6 @@ int main(int argc, char* argv[]) {
         // std::string_view line(cursor + 1, length);
 
         if (*cursor == '[') {
-            seen_header = true;
             cursor++;
             std::string_view str(cursor, std::min(4096L, end_ptr - cursor - 1));
             if (str[0] == 'T' && str.starts_with("TimeControl \"")) {
@@ -247,6 +248,8 @@ int main(int argc, char* argv[]) {
                 size_t end = str.find('"', 10);
                 cursor += 10;
                 std::from_chars(str.data() + 10, str.data() + end, len);
+                currentGame->plyCount = len;
+                seen_header = true;
                 if constexpr (TRACK_MOVES) {
                     currentGame->scores.reserve(len);
                     currentGame->times.reserve(len);
@@ -265,13 +268,14 @@ int main(int argc, char* argv[]) {
             int draw_plies = 0;
             int win_plies = 0;
             int lose_plies = 0;
+            int plies = 0;
 
             GameResult& alt_result = currentGame->alt_result;
 
             // Search for comments wrapped in '{' and '}'
             // pos = str.find('{', pos);
             cursor = stream_find(cursor, '{') + 1;
-            while (true) {
+            while (plies < currentGame->plyCount) {
             parse_moves_loop:
                 // the shortest possible score is a single-digit mate score, it has length 3
                 const char * end;
@@ -313,6 +317,7 @@ int main(int argc, char* argv[]) {
                     currentGame->scores.push_back(score);
                     currentGame->times.push_back(cumtime / TIME_QUANT);
                 }
+                ++plies;
 
                 if (alt_result == Unknown) {
                     if (score * sign >= win_th) {
@@ -348,11 +353,17 @@ int main(int argc, char* argv[]) {
                 // std::cout << "> seeking: ";
 
                 // if we just saw the last move of the game then we're probably 5 chars past the comma in the last comment
-                auto pos = (const char *) memchr(cursor, '{', 15);
+                auto pos = (const char *) memchr(cursor, '{', std::min(15L, end_ptr - cursor));
                 if (pos) {
                     cursor = pos + 1;
                     goto parse_moves_loop;
                 }
+                // const char * pos;
+                // for (pos = cursor; pos < std::min(cursor + 15, end_ptr); ++pos)
+                //     if (*pos == '{') {
+                //         cursor = pos + 1;
+                //         goto parse_moves_loop;
+                //     }
 
                 cursor = stream_find(cursor, '[');
                 if (!cursor) [[unlikely]] cursor = end_ptr;
@@ -370,7 +381,7 @@ int main(int argc, char* argv[]) {
                     if (alt_nb == WhiteWin) alt_nb = BlackWin;
                     else if (alt_nb == BlackWin) alt_nb = WhiteWin;
                 }
-                new_base_matrix[actual_nb][alt_nb]++;
+                match_matrix[actual_nb][alt_nb]++;
 
                 if (alt_result != currentGame->result) {
                     mispredicts++;
@@ -384,7 +395,7 @@ int main(int argc, char* argv[]) {
                     if (actual_nb == WhiteWin) actual_nb = BlackWin;
                     else if (actual_nb == BlackWin) actual_nb = WhiteWin;
                 }
-                new_base_matrix[actual_nb][actual_nb]++;
+                match_matrix[actual_nb][actual_nb]++;
             }
             tot_time += cumtime / TIME_QUANT;
             // assert(currentGame->data.size() == len);
@@ -416,8 +427,9 @@ int main(int argc, char* argv[]) {
             std::cout << "\n";
         }
     }
-    std::cout << "Draw: " << draw_th << ", " << draw_len << "\n";
-    std::cout << "Win: " << win_th << ", " << win_len << "\n";
+    std::cout << "Parameters: ";
+    std::cout << "draw(" << draw_th << "cp, " << draw_len << " plies)" << "   ";
+    std::cout << "win(" << win_th << "cp, " << win_len << " plies)\n";
 
 
     double save_per = double(savings) / 1000.0 / games.size();
@@ -446,7 +458,8 @@ int main(int argc, char* argv[]) {
         ++i;
     }
 
-    std::cout << "\nNew vs Base matrix:\n";
+    // std::cout << "\nNew vs Base matrix:\n";
+    std::cout << "\n";
     std::cout << std::left << std::setw(8) << "actual";
     for (int res = 0; res < 3; ++res)
         std::cout << "  " << std::left << std::setw(8) << res2str_nb(GameResult(res));
@@ -454,7 +467,7 @@ int main(int argc, char* argv[]) {
     std::cout << "----------------------------------------";
     std::printf("\n");
     i = 0;
-    for (auto& row : new_base_matrix) {
+    for (auto& row : match_matrix) {
         std::cout << std::left << std::setw(8) << res2str_nb(GameResult(i));
         int64_t tot = row[0] + row[1] + row[2];
         for (int64_t& e : row)
@@ -463,6 +476,28 @@ int main(int argc, char* argv[]) {
         ++i;
     }
 
+    int wins   = std::accumulate(match_matrix[0], match_matrix[1], 0);
+    int draws  = std::accumulate(match_matrix[1], match_matrix[2], 0);
+    int losses = std::accumulate(match_matrix[2], match_matrix[3], 0);
+    std::cout << "\n"
+        << "[" << wins << ", "
+        << draws << ", "
+        << losses << "]"
+        << "  -->  "
+        << "[" << match_matrix[0][0] + match_matrix[1][0] + match_matrix[2][0] << ", "
+        << match_matrix[0][1] + match_matrix[1][1] + match_matrix[2][1] << ", "
+        << match_matrix[0][2] + match_matrix[1][2] + match_matrix[2][2] << "]"
+        << "\n";
+
+    double error = double(-50 * match_matrix[0][1] - 100 * match_matrix[0][2]
+        + 50 * match_matrix[1][0] - 50 * match_matrix[1][2]
+        + 100 * match_matrix[2][0] + 50 * match_matrix[2][1]) / games.size();
+
+    std::cout <<  std::fixed << std::right;
+    std::cout << "match outcome for new: " << std::setprecision(4) << std::setw(7)
+        << 50.0 * (wins - losses) / games.size() << " %\n";
+    std::cout << "match error for new:   " << std::setprecision(4) << std::setw(7)
+        << error << " %\n";
 
     munmap((void*)file_data, sb.st_size);
     return 0;
