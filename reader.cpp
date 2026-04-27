@@ -353,11 +353,13 @@ int main(int argc, char* argv[]) {
                 // std::cout << "> seeking: ";
 
                 // if we just saw the last move of the game then we're probably 5 chars past the comma in the last comment
-                auto pos = (const char *) memchr(cursor, '{', std::min(15L, end_ptr - cursor));
-                if (pos) {
-                    cursor = pos + 1;
-                    goto parse_moves_loop;
-                }
+                // auto pos = (const char *) memchr(cursor, '{', std::min(15L, end_ptr - cursor));
+                // if (pos) {
+                //     cursor = pos + 1;
+                //     goto parse_moves_loop;
+                // }
+                cursor = stream_find(cursor, '{') + 1;
+
                 // const char * pos;
                 // for (pos = cursor; pos < std::min(cursor + 15, end_ptr); ++pos)
                 //     if (*pos == '{') {
