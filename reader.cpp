@@ -274,9 +274,16 @@ int main(int argc, char* argv[]) {
 
             // Search for comments wrapped in '{' and '}'
             // pos = str.find('{', pos);
-            cursor = stream_find(cursor, '{') + 1;
             while (plies < currentGame->plyCount) {
-            parse_moves_loop:
+                cursor = stream_find(cursor, '{') + 1;
+                // maybe a short loop could be faster here...
+                // const char * pos;
+                // for (pos = cursor; pos < std::min(cursor + 15, end_ptr); ++pos)
+                //     if (*pos == '{') {
+                //         cursor = pos + 1;
+                //         goto parse_moves_loop;
+                //     }
+
                 // the shortest possible score is a single-digit mate score, it has length 3
                 const char * end;
                 for (end = cursor + 3; *end != '/'; ++end);
@@ -348,30 +355,10 @@ int main(int argc, char* argv[]) {
                         draw_plies = 0;
                 }
                 sign *= (-1);
-
-                // seek until next comment, or until we encounter the header for the next game
-                // std::cout << "> seeking: ";
-
-                // if we just saw the last move of the game then we're probably 5 chars past the comma in the last comment
-                auto pos = (const char *) memchr(cursor, '{', std::min(15L, end_ptr - cursor));
-                if (pos) {
-                    cursor = pos + 1;
-                    goto parse_moves_loop;
-                }
-                // cursor = stream_find(cursor, '{') + 1;
-
-                // const char * pos;
-                // for (pos = cursor; pos < std::min(cursor + 15, end_ptr); ++pos)
-                //     if (*pos == '{') {
-                //         cursor = pos + 1;
-                //         goto parse_moves_loop;
-                //     }
-
             }
-                cursor = stream_find(cursor, '[');
-                if (!cursor) [[unlikely]] cursor = end_ptr;
-                goto game_end;
-        game_end:
+            cursor = stream_find(cursor, '[');
+            if (!cursor) [[unlikely]] cursor = end_ptr;
+
             if (alt_result != Unknown) {
                 error_matrix[currentGame->result][alt_result]++;
 
