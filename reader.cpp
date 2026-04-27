@@ -306,7 +306,8 @@ int main(int argc, char* argv[]) {
                 // float_t time = parse_f(line, pos, end);
                 uint time = fixed_unsigned_stoi(cursor, 3);
                 cumtime += time * qq;
-                cursor = end + 6; // "s} __ "; cursor might point past the end of the file now
+                cursor = end + 6; // "s} __ {"; cursor might point past the end of the file now
+
                 // std::cout << "> after time: " << std::string_view(end, 6) << "#\n";
                 if constexpr (TRACK_MOVES) {
                     currentGame->scores.push_back(score);
@@ -345,18 +346,16 @@ int main(int argc, char* argv[]) {
 
                 // seek until next comment, or until we encounter the header for the next game
                 // std::cout << "> seeking: ";
-                for (; cursor < end_ptr; ++cursor) {
-                    if (*cursor == '{') {
-                        cursor++;
-                        // std::cout << std::endl;
-                        goto parse_moves_loop;
-                    }
-                    if (*cursor == '[')
-                    {
-                        goto game_end;
-                    }
-                    // std::cout << *cursor;
+
+                // if we just saw the last move of the game then we're probably 5 chars past the comma in the last comment
+                auto pos = (const char *) memchr(cursor, '{', 15);
+                if (pos) {
+                    cursor = pos + 1;
+                    goto parse_moves_loop;
                 }
+
+                cursor = stream_find(cursor, '[');
+                if (!cursor) [[unlikely]] cursor = end_ptr;
                 goto game_end;
             }
         game_end:
