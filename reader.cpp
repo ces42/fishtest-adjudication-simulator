@@ -132,7 +132,6 @@ inline int16_t fixed_signed_stoi(const char * str, int decimals = 2) {
 constexpr bool TRACK_MOVES = false;
 
 int main(int argc, char* argv[]) {
-
     if (argc < 6) {
         std::cerr << "Usage: " << argv[0] << " <filename.pgn> <draw threshold> <draw plies> <resign threshold> <resign plies>\n";
         return 1;
@@ -277,12 +276,9 @@ int main(int argc, char* argv[]) {
             while (plies < currentGame->plyCount) {
                 cursor = stream_find(cursor, '{') + 1;
                 // maybe a short loop could be faster here...
-                // const char * pos;
-                // for (pos = cursor; pos < std::min(cursor + 15, end_ptr); ++pos)
-                //     if (*pos == '{') {
-                //         cursor = pos + 1;
-                //         goto parse_moves_loop;
-                //     }
+                // for (; *cursor != '{'; ++cursor);
+                // ++cursor;
+                // ... but I'm measuring a 15% perf decrease
 
                 // the shortest possible score is a single-digit mate score, it has length 3
                 const char * end;
@@ -302,7 +298,11 @@ int main(int argc, char* argv[]) {
                 cursor = end + 1; // +1 to move past "/"
 
                 // +1 because depth is at least one digit
-                for (end = cursor + 1; *end != ' '; ++end);
+                if (*(cursor + 2) == ' ')
+                    end = cursor + 2;
+                else [[unlikely]]
+                    for (end = cursor + 1; *end != ' '; ++end);
+
 
                 // int depth = std::stoi(line.substr(pos, end - pos));
                 // int depth;
@@ -317,7 +317,7 @@ int main(int argc, char* argv[]) {
                 // float_t time = parse_f(line, pos, end);
                 uint time = fixed_unsigned_stoi(cursor, 3);
                 cumtime += time * qq;
-                cursor = end + 6; // "s} __ {"; cursor might point past the end of the file now
+                cursor = end + 6; // "s} __ {"
 
                 // std::cout << "> after time: " << std::string_view(end, 6) << "#\n";
                 if constexpr (TRACK_MOVES) {
