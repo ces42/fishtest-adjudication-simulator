@@ -1,4 +1,5 @@
 #include <cassert>
+#include <cmath>
 #include <stdfloat>
 #include <iostream>
 #include <vector>
@@ -127,6 +128,34 @@ inline int16_t fixed_signed_stoi(const char * str, int decimals = 2) {
         val = val * 10 + (*str++ - '0');
     }
     return sign * val;
+}
+
+constexpr double CI95 = 1.959963984540054;
+
+double score2elo(double zb_score) {
+    // log10(1/(.5 + zb_score)) = log10((.5 - zb_score) / (.5 + zb_score))
+    //                          = log10((1 - 2*zb_score) / (1 + 2*zb_score))
+    //                          = log1p(-2*zb_score) - log1p(2*zb_score)
+    double elo = 400 * (log1p(2*zb_score) - log1p(-2*zb_score)) / log(10);
+    // assert( ( -400 * log10(1/(0.5 + zb_score)) ) - elo < 1e-10);
+    return elo;
+}
+
+std::pair<double, double> tri2elo(int ls, int ds, int ws) {
+    const int games = ls + ds + ws;
+    double l = double(ls) / games;
+    double d = double(ds) / games;
+    double w = double(ws) / games;
+    double zb_score = .5 * (w - l);
+
+    double stdev_tri = .5 * sqrt(1 - d);
+    double elo = score2elo(zb_score);
+
+    return {
+        elo,
+        400 / log(10) / (1 + 2*zb_score) / (1 - 2*zb_score)
+            * stdev_tri / sqrt(games) * CI95
+    };
 }
 
 constexpr bool TRACK_MOVES = false;
@@ -421,6 +450,7 @@ int main(int argc, char* argv[]) {
     std::cout << "win(" << win_th << "cp, " << win_len << " plies)\n";
 
 
+    std::cout << std::setprecision(3);
     double save_per = double(savings) / 1000.0 / games.size();
     double avg_game_dur = double(tot_time) / 1000.0 / games.size();
     std::cout << "Parsed " << games.size() << " games.\n";
@@ -436,7 +466,6 @@ int main(int argc, char* argv[]) {
     std::printf("\n");
     std::cout << "----------------------------------------";
     std::printf("\n");
-    std::cout << std::setprecision(3);
     int i = 0;
     for (auto& row : error_matrix) {
         std::cout << std::left << std::setw(8) << res2str(GameResult(i));
@@ -465,28 +494,60 @@ int main(int argc, char* argv[]) {
         ++i;
     }
 
+    const auto& N = games.size();
+
     int wins   = std::accumulate(match_matrix[0], match_matrix[1], 0);
     int draws  = std::accumulate(match_matrix[1], match_matrix[2], 0);
     int losses = std::accumulate(match_matrix[2], match_matrix[3], 0);
+    int alt_wins   = match_matrix[0][0] + match_matrix[1][0] + match_matrix[2][0];
+    int alt_draws  = match_matrix[0][1] + match_matrix[1][1] + match_matrix[2][1];
+    int alt_losses = match_matrix[0][2] + match_matrix[1][2] + match_matrix[2][2]; 
     std::cout << "\n"
-        << "[" << wins << ", "
-        << draws << ", "
-        << losses << "]"
+        << "[" << losses << ", " << draws << ", " << wins << "]"
         << "  -->  "
-        << "[" << match_matrix[0][0] + match_matrix[1][0] + match_matrix[2][0] << ", "
-        << match_matrix[0][1] + match_matrix[1][1] + match_matrix[2][1] << ", "
-        << match_matrix[0][2] + match_matrix[1][2] + match_matrix[2][2] << "]"
+        << "[" << alt_losses << ", " << alt_draws << ", " << alt_wins << "]"
         << "\n";
 
-    double error = double(-50 * match_matrix[0][1] - 100 * match_matrix[0][2]
-        + 50 * match_matrix[1][0] - 50 * match_matrix[1][2]
-        + 100 * match_matrix[2][0] + 50 * match_matrix[2][1]) / games.size();
+    // "zero-based" score
+    int zb_score = wins - losses;
+    int alt_zb_score = alt_wins - alt_losses;
+    // score is computed by +1 - +1/2 - 0 for WDL
+    // _pc indicates that we have divided by number of games and mult by 100
+    // note that adding 1 to zb_score / N has bad floating point cancellation
+    double score_pc = 50.0 * (1 + double(zb_score) / N);
+    double alt_score_pc = 50.0 * (1 + double(alt_zb_score) / N);
+
+    double error_pc = 50.0 * (alt_zb_score - zb_score) / N;
+
+    std::cout << std::setprecision(5);
+    std::cout << "draw rate:      " << 100.0 * draws / N << "  -->  "
+        << 100.0 * alt_draws / N << "\n";
 
     std::cout <<  std::fixed << std::right;
-    std::cout << "match outcome for new: " << std::setprecision(4) << std::setw(7)
-        << 50.0 * (wins - losses) / games.size() << " %\n";
-    std::cout << "match error for new:   " << std::setprecision(4) << std::setw(7)
-        << error << " %\n";
+    std::cout << "score - 50% (new pov):  " << std::setprecision(4) << std::setw(7)
+        << 50.0 * zb_score / N << " %\n";
+    std::cout << "score error (new pov):  " << std::setprecision(4) << std::setw(7)
+        << error_pc << " %\n";
+
+    double t0 = (0.5 * zb_score / N) / std::sqrt(1 - 1.0 * draws/N);
+    double alt_t0 = (0.5 * alt_zb_score / N) / std::sqrt(1 - 1.0 * alt_draws/N);
+    const double ELO_CONST = 800 / std::log(10); // 347.436
+
+    assert( std::abs(ELO_CONST - 347.43) < 0.1 );
+    std::cout << "nElo estimate     = " << ELO_CONST * t0
+        <<  "  [" << ELO_CONST * (t0 - CI95 / std::sqrt(N)) << ", "
+        << ELO_CONST * (t0 + CI95 / std::sqrt(N)) << "] 95% CI\n";
+
+    std::cout << "alt nElo estimate = " << ELO_CONST * alt_t0 <<  "  [" << ELO_CONST * (alt_t0 - CI95 / std::sqrt(N)) << ", "
+        << ELO_CONST * (alt_t0 + CI95 / std::sqrt(N)) << "] 95% CI\n";
+
+    auto elo = tri2elo(wins, draws, losses);
+    auto alt_elo = tri2elo(alt_wins, alt_draws, alt_losses);
+
+    std::cout << std::setprecision(2);
+    std::cout << "elo range     = " << elo.first <<  " +- " << elo.second << "\n";
+    std::cout << "alt elo range = " << alt_elo.first <<  " +- " << alt_elo.second << "\n";
+
 
     munmap((void*)file_data, sb.st_size);
     return 0;
