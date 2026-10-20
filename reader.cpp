@@ -221,6 +221,17 @@ int main(int argc, char* argv[]) {
     int64_t error_matrix[3][3] = { 0 };
     int64_t match_matrix[3][3] = { 0 };
 
+    int8_t round_scores[8 * 1024];
+    int64_t penta_scores[5] = { 0 }; // New's pair scores: 0, 0.5, 1, 1.5, 2.
+    int batch = -1;
+    size_t round = 0;
+    size_t rounds_cleared = 0;
+    auto finish_batch = [&] {
+        for (size_t i = 0; i < rounds_cleared; ++i)
+            if (round_scores[i] >= 6)
+                ++penta_scores[round_scores[i] - 6];
+    };
+
     bool seen_header = false;
     // read the file delimited by header lines
     // while (std::getline(file, line, '[')) {
@@ -281,6 +292,23 @@ int main(int argc, char* argv[]) {
                 if constexpr (TRACK_MOVES) {
                     currentGame->scores.reserve(len);
                     currentGame->times.reserve(len);
+                }
+            } else if (str[0] == 'E' && str.starts_with("Event \"Batch ")) {
+                int next_batch;
+                std::from_chars(str.data() + 13, str.data() + str.find(':', 13), next_batch);
+                if (batch != next_batch) {
+                    finish_batch();
+                    batch = next_batch;
+                    rounds_cleared = 128;
+                    std::memset(round_scores, 0, rounds_cleared);
+                }
+            } else if (str[0] == 'R' && str.starts_with("Round \"")) {
+                std::from_chars(str.data() + 7, str.data() + str.find('"', 7), round);
+                assert(batch >= 0 && round >= 1 && round <= sizeof(round_scores));
+                --round; // PGN rounds are numbered from 1.
+                while (round >= rounds_cleared) {
+                    std::memset(round_scores + rounds_cleared, 0, rounds_cleared);
+                    rounds_cleared *= 2;
                 }
             }
             cursor = stream_find(cursor, '\n') + 1;
@@ -416,12 +444,19 @@ int main(int argc, char* argv[]) {
                 match_matrix[actual_nb][actual_nb]++;
             }
             tot_time += cumtime / TIME_QUANT;
+            // Add 3 per game to distinguish incomplete pairs (3..5)
+            // from complete pairs (6..10), whose half-point score is value - 6.
+            int score = currentGame->white_is_new ? 2 - currentGame->result
+                                                  : currentGame->result;
+            assert(batch >= 0 && round_scores[round] < 6);
+            round_scores[round] += score + 3;
             // assert(currentGame->data.size() == len);
             currentGame = &games.emplace_back();
             seen_header = false;
         }
     }
 
+    finish_batch();
     games.pop_back();
 
     if constexpr (TRACK_MOVES)
@@ -460,21 +495,21 @@ int main(int argc, char* argv[]) {
         save_per / avg_game_dur * 100.0 << "%\n";
     // std::cout << "shortest game: " << min_len << "moves\n";
 
-    std::cout << std::endl << std::left << std::setw(8) << "actual";
-    for (int res = 0; res < 3; ++res)
-        std::cout << "  " << std::left << std::setw(8) << res2str(GameResult(res));
-    std::printf("\n");
-    std::cout << "----------------------------------------";
-    std::printf("\n");
-    int i = 0;
-    for (auto& row : error_matrix) {
-        std::cout << std::left << std::setw(8) << res2str(GameResult(i));
-        int64_t tot = row[0] + row[1] + row[2];
-        for (int64_t& e : row)
-            std::cout << "  " << std::setw(8) << (tot ? e * 1.0 / tot * 100 : 0.0);
-        std::cout << std::endl;
-        ++i;
-    }
+    // std::cout << std::endl << std::left << std::setw(8) << "actual";
+    // for (int res = 0; res < 3; ++res)
+    //     std::cout << "  " << std::left << std::setw(8) << res2str(GameResult(res));
+    // std::printf("\n");
+    // std::cout << "----------------------------------------";
+    // std::printf("\n");
+    // int i = 0;
+    // for (auto& row : error_matrix) {
+    //     std::cout << std::left << std::setw(8) << res2str(GameResult(i));
+    //     int64_t tot = row[0] + row[1] + row[2];
+    //     for (int64_t& e : row)
+    //         std::cout << "  " << std::setw(8) << (tot ? e * 1.0 / tot * 100 : 0.0);
+    //     std::cout << std::endl;
+    //     ++i;
+    // }
 
     // std::cout << "\nNew vs Base matrix:\n";
     std::cout << "\n";
@@ -484,7 +519,7 @@ int main(int argc, char* argv[]) {
     std::printf("\n");
     std::cout << "----------------------------------------";
     std::printf("\n");
-    i = 0;
+    int i = 0;
     for (auto& row : match_matrix) {
         std::cout << std::left << std::setw(8) << res2str_nb(GameResult(i));
         int64_t tot = row[0] + row[1] + row[2];
