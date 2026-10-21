@@ -165,6 +165,7 @@ int main(int argc, char* argv[]) {
         std::cerr << "Usage: " << argv[0] << " <filename.pgn> <draw threshold> <draw plies> <resign threshold> <resign plies>\n";
         return 1;
     }
+    std::cout << argv[1] << std::endl;
 
     // 1. Open the file using low-level POSIX open()
     int fd = open(argv[1], O_RDONLY);
@@ -222,14 +223,18 @@ int main(int argc, char* argv[]) {
     int64_t match_matrix[3][3] = { 0 };
 
     int8_t round_scores[8 * 1024];
-    int64_t penta_scores[5] = { 0 }; // New's pair scores: 0, 0.5, 1, 1.5, 2.
+    int8_t alt_round_scores[8 * 1024];
+    int penta_scores[5] = { 0 }; // New's pair scores: 0, 0.5, 1, 1.5, 2.
+    int alt_penta_scores[5] = { 0 };
     int batch = -1;
     size_t round = 0;
     size_t rounds_cleared = 0;
     auto finish_batch = [&] {
         for (size_t i = 0; i < rounds_cleared; ++i)
-            if (round_scores[i] >= 6)
+            if (round_scores[i] >= 6) {
                 ++penta_scores[round_scores[i] - 6];
+                ++alt_penta_scores[alt_round_scores[i] - 6];
+            }
     };
 
     bool seen_header = false;
@@ -301,6 +306,7 @@ int main(int argc, char* argv[]) {
                     batch = next_batch;
                     rounds_cleared = 128;
                     std::memset(round_scores, 0, rounds_cleared);
+                    std::memset(alt_round_scores, 0, rounds_cleared);
                 }
             } else if (str[0] == 'R' && str.starts_with("Round \"")) {
                 std::from_chars(str.data() + 7, str.data() + str.find('"', 7), round);
@@ -308,6 +314,7 @@ int main(int argc, char* argv[]) {
                 --round; // PGN rounds are numbered from 1.
                 while (round >= rounds_cleared) {
                     std::memset(round_scores + rounds_cleared, 0, rounds_cleared);
+                    std::memset(alt_round_scores + rounds_cleared, 0, rounds_cleared);
                     rounds_cleared *= 2;
                 }
             }
@@ -450,6 +457,9 @@ int main(int argc, char* argv[]) {
                                                   : currentGame->result;
             assert(batch >= 0 && round_scores[round] < 6);
             round_scores[round] += score + 3;
+            GameResult alt = alt_result == Unknown ? currentGame->result : alt_result;
+            int alt_score = currentGame->white_is_new ? 2 - alt : alt;
+            alt_round_scores[round] += alt_score + 3;
             // assert(currentGame->data.size() == len);
             currentGame = &games.emplace_back();
             seen_header = false;
@@ -537,11 +547,21 @@ int main(int argc, char* argv[]) {
     int alt_wins   = match_matrix[0][0] + match_matrix[1][0] + match_matrix[2][0];
     int alt_draws  = match_matrix[0][1] + match_matrix[1][1] + match_matrix[2][1];
     int alt_losses = match_matrix[0][2] + match_matrix[1][2] + match_matrix[2][2]; 
-    std::cout << "\n"
-        << "[" << losses << ", " << draws << ", " << wins << "]"
-        << "  -->  "
-        << "[" << alt_losses << ", " << alt_draws << ", " << alt_wins << "]"
-        << "\n";
+    // std::cout << "\n"
+    //     << "[" << losses << ", " << draws << ", " << wins << "]"
+    //     << "  -->  "
+    //     << "[" << alt_losses << ", " << alt_draws << ", " << alt_wins << "]"
+    //     << "\n";
+
+    std::cout << "\n" << "Penta:     [";
+    for (int& x : penta_scores)
+        std::cout << x << ", ";
+    std::cout << "]\n";
+
+    std::cout << "alt Penta: [";
+    for (int& x : alt_penta_scores)
+        std::cout << x << ", ";
+    std::cout << "]\n";
 
     // "zero-based" score
     int zb_score = wins - losses;
@@ -555,8 +575,8 @@ int main(int argc, char* argv[]) {
     double error_pc = 50.0 * (alt_zb_score - zb_score) / N;
 
     std::cout << std::setprecision(5);
-    std::cout << "draw rate:      " << 100.0 * draws / N << "  -->  "
-        << 100.0 * alt_draws / N << "\n";
+    // std::cout << "draw rate:      " << 100.0 * draws / N << "  -->  "
+    //     << 100.0 * alt_draws / N << "\n";
 
     std::cout <<  std::fixed << std::right;
     std::cout << "score - 50% (new pov):  " << std::setprecision(4) << std::setw(7)
@@ -564,24 +584,49 @@ int main(int argc, char* argv[]) {
     std::cout << "score error (new pov):  " << std::setprecision(4) << std::setw(7)
         << error_pc << " %\n";
 
-    double t0 = (0.5 * zb_score / N) / std::sqrt(1 - 1.0 * draws/N);
-    double alt_t0 = (0.5 * alt_zb_score / N) / std::sqrt(1 - 1.0 * alt_draws/N);
+    double score0hat = double(zb_score) / N;
+    double alt_score0hat = double(alt_zb_score) / N;
+    double t0 = score0hat / std::sqrt(1 - 1.0 * draws/N);
+
+    double alt_t0 = alt_score0hat / std::sqrt(1 - 1.0 * alt_draws/N);
+
+    auto pentaN = 0;
+    for (int i = 0; i < 5; ++i) 
+        pentaN += penta_scores[i];
+
+    double penta_Ei2 = 0.0; // \sum_i p_i i^2 for computing penta variance
+    double penta_Ei2_alt = 0.0;
+    for (int i = -2; i <= 2; ++i) 
+    {
+        penta_Ei2 += double(i*i * penta_scores[2 + i]) / pentaN;
+        penta_Ei2_alt += double(i*i * alt_penta_scores[2 + i]) / pentaN;
+    }
+
+    double t0_pent = std::sqrt(2) * score0hat
+                     / std::sqrt(penta_Ei2 - 4 * score0hat * score0hat);
+    double alt_t0_pent = std::sqrt(2) * alt_score0hat
+                         / std::sqrt(penta_Ei2_alt - 4 * alt_score0hat * alt_score0hat);
+
     const double ELO_CONST = 800 / std::log(10); // 347.436
 
     assert( std::abs(ELO_CONST - 347.43) < 0.1 );
-    std::cout << "nElo estimate     = " << ELO_CONST * t0
-        <<  "  [" << ELO_CONST * (t0 - CI95 / std::sqrt(N)) << ", "
-        << ELO_CONST * (t0 + CI95 / std::sqrt(N)) << "] 95% CI\n";
+    // std::cout << "trinomial nElo estimate     = " << ELO_CONST * t0
+    //     <<  "  [" << ELO_CONST * (t0 - CI95 / std::sqrt(N)) << ", "
+    //     << ELO_CONST * (t0 + CI95 / std::sqrt(N)) << "] 95% CI\n";
 
-    std::cout << "alt nElo estimate = " << ELO_CONST * alt_t0 <<  "  [" << ELO_CONST * (alt_t0 - CI95 / std::sqrt(N)) << ", "
-        << ELO_CONST * (alt_t0 + CI95 / std::sqrt(N)) << "] 95% CI\n";
+    std::cout << "nElo estimate     = " << ELO_CONST * t0_pent
+        <<  "  [" << ELO_CONST * (t0_pent - CI95 / std::sqrt(N)) << ", "
+        << ELO_CONST * (t0_pent + CI95 / std::sqrt(N)) << "] 95% CI\n";
 
-    auto elo = tri2elo(wins, draws, losses);
-    auto alt_elo = tri2elo(alt_wins, alt_draws, alt_losses);
+    std::cout << "alt nElo estimate = " << ELO_CONST * alt_t0_pent <<  "  [" << ELO_CONST * (alt_t0_pent - CI95 / std::sqrt(N)) << ", "
+        << ELO_CONST * (alt_t0_pent + CI95 / std::sqrt(N)) << "] 95% CI\n";
 
-    std::cout << std::setprecision(2);
-    std::cout << "elo range     = " << elo.first <<  " +- " << elo.second << "\n";
-    std::cout << "alt elo range = " << alt_elo.first <<  " +- " << alt_elo.second << "\n";
+    // auto elo = tri2elo(wins, draws, losses);
+    // auto alt_elo = tri2elo(alt_wins, alt_draws, alt_losses);
+    //
+    // std::cout << std::setprecision(2);
+    // std::cout << "elo range     = " << elo.first <<  " +- " << elo.second << "\n";
+    // std::cout << "alt elo range = " << alt_elo.first <<  " +- " << alt_elo.second << "\n";
 
 
     munmap((void*)file_data, sb.st_size);
