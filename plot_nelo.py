@@ -20,7 +20,7 @@ TIME_SAVED = re.compile(r"^\s*avg time saved:.*?([+-]?[\d.eE]+)%\s*$")
 GAMES = re.compile(r"^\s*Parsed (\d+) games\.\s*$")
 PARAMETERS = re.compile(
     r"^\s*Parameters:\s*draw\((-?\d+)cp,\s*(\d+) plies\)\s*"
-    r"win\((-?\d+)cp,\s*(\d+) plies\)\s*$"
+    r"win\((-?\d+)cp,\s*(\d+) plies\)(?:\s+twosided=(false|true))?\s*$"
 )
 FILENAME = re.compile(
     r"""(?:^|[\s"'])([^\s"']*?([^/\\\s"']+)\.pgn(?:\.gz)?)(?=$|[\s"'])"""
@@ -60,7 +60,7 @@ def read_estimates(lines):
             filename, run_id = filename_match.groups()
         parameters_match = PARAMETERS.match(line)
         if parameters_match:
-            draw_cp, draw_plies, win_cp, win_plies = map(int, parameters_match.groups())
+            draw_cp, draw_plies, win_cp, win_plies = map(int, parameters_match.groups()[:4])
             enabled = [
                 f"{kind}: {cp}cp over {plies} plies"
                 for kind, cp, plies in (
@@ -69,6 +69,9 @@ def read_estimates(lines):
                 if plies < 99
             ]
             rule = ", ".join(enabled) or "Adjudication disabled"
+            # Older reader output used two-sided adjudication implicitly.
+            mode = parameters_match.group(5) or "true"
+            rule += ", two-sided" if mode == "true" else ", one-sided"
             time_saved = None
             games = None
         games_match = GAMES.match(line)

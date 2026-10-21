@@ -161,9 +161,20 @@ std::pair<double, double> tri2elo(int ls, int ds, int ws) {
 constexpr bool TRACK_MOVES = false;
 
 int main(int argc, char* argv[]) {
-    if (argc < 6) {
-        std::cerr << "Usage: " << argv[0] << " <filename.pgn> <draw threshold> <draw plies> <resign threshold> <resign plies>\n";
+    if (argc < 6 || argc > 7) {
+        std::cerr << "Usage: " << argv[0] << " <filename.pgn> <draw threshold> <draw plies> <resign threshold> <resign plies> [twosided=false|true]\n";
         return 1;
+    }
+    bool twosided = false;
+    if (argc == 7) {
+        std::string_view mode(argv[6]);
+        if (mode.starts_with("twosided="))
+            mode.remove_prefix(9);
+        if (mode != "false" && mode != "true") {
+            std::cerr << "Error: twosided must be false or true\n";
+            return 1;
+        }
+        twosided = mode == "true";
     }
     std::cout << argv[1] << std::endl;
 
@@ -240,6 +251,8 @@ int main(int argc, char* argv[]) {
     bool seen_header = false;
     // read the file delimited by header lines
     // while (std::getline(file, line, '[')) {
+    // Dispatch once, keeping the mode check out of the move loop.
+    auto read_games = [&]<bool TwoSided>() {
     while (cursor < end_ptr) {
 
         // Create a string_view representing this specific block of the file
@@ -391,23 +404,37 @@ int main(int argc, char* argv[]) {
                 ++plies;
 
                 if (alt_result == Unknown) {
-                    if (score * sign >= win_th) {
-                        win_plies += 1;
-                        if (win_plies >= win_len) {
-                            alt_result = WhiteWin;
-                            currentGame->early_time = cumtime / TIME_QUANT;
-                        }
-                    } else
-                        win_plies = 0;
+                    if constexpr (TwoSided) {
+                        if (score * sign >= win_th) {
+                            win_plies += 1;
+                            if (win_plies >= win_len) {
+                                alt_result = WhiteWin;
+                                currentGame->early_time = cumtime / TIME_QUANT;
+                            }
+                        } else
+                            win_plies = 0;
 
-                    if (score * sign <= -win_th) {
-                        lose_plies += 1;
-                        if (lose_plies >= win_len) {
-                            alt_result = BlackWin;
-                            currentGame->early_time = cumtime / TIME_QUANT;
-                        }
-                    } else
-                        lose_plies = 0;
+                        if (score * sign <= -win_th) {
+                            lose_plies += 1;
+                            if (lose_plies >= win_len) {
+                                alt_result = BlackWin;
+                                currentGame->early_time = cumtime / TIME_QUANT;
+                            }
+                        } else
+                            lose_plies = 0;
+                    } else {
+                        // Only the side to move's own negative evaluation can
+                        // trigger resignation. Its turns are two plies apart.
+                        int& losing_plies = sign > 0 ? lose_plies : win_plies;
+                        if (score <= -win_th) {
+                            losing_plies += 2;
+                            if (losing_plies >= win_len) {
+                                alt_result = sign > 0 ? BlackWin : WhiteWin;
+                                currentGame->early_time = cumtime / TIME_QUANT;
+                            }
+                        } else
+                            losing_plies = 0;
+                    }
 
                     if (std::abs(score) <= draw_th) {
                         draw_plies += 1;
@@ -465,6 +492,11 @@ int main(int argc, char* argv[]) {
             seen_header = false;
         }
     }
+    };
+    if (twosided)
+        read_games.template operator()<true>();
+    else
+        read_games.template operator()<false>();
 
     finish_batch();
     games.pop_back();
@@ -492,7 +524,8 @@ int main(int argc, char* argv[]) {
     }
     std::cout << "Parameters: ";
     std::cout << "draw(" << draw_th << "cp, " << draw_len << " plies)" << "   ";
-    std::cout << "win(" << win_th << "cp, " << win_len << " plies)\n";
+    std::cout << "win(" << win_th << "cp, " << win_len << " plies)"
+              << "   twosided=" << (twosided ? "true" : "false") << "\n";
 
 
     std::cout << std::setprecision(3);

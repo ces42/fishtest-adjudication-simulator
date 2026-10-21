@@ -112,8 +112,7 @@ Exclude runs with fewer than a specified number of parsed games:
 python3 plot_nelo.py --min-games 100000 -o adjudication.png < reader_output.txt
 ```
 
-With a positive threshold, every run must have a `Parsed N games.`
-line. The plotter reports an error if all runs are filtered out.
+The plotter reports an error if all runs are filtered out.
 
 The plotter treats a rule with a ply count `>99` as disabled when generating
 labels.
