@@ -66,7 +66,7 @@ def read_estimates(lines):
                 for kind, cp, plies in (
                     ("draw", draw_cp, draw_plies), ("win", win_cp, win_plies)
                 )
-                if plies != 99
+                if plies < 99
             ]
             rule = ", ".join(enabled) or "Adjudication disabled"
             time_saved = None
