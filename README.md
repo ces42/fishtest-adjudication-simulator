@@ -35,7 +35,8 @@ such as:
 [TimeControl "60+0.6"]
 ```
 
-The pgn parsing is **very** brittle and will break if the comments in the pgn file follow a slightly different format than those on hugging face.
+> [!CAUTION]
+> The pgn parsing is **very** brittle and will break if the comments in the pgn file follow a slightly different format than those on hugging face.
 
 ## Running the reader
 
