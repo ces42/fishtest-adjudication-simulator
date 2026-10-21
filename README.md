@@ -60,7 +60,7 @@ For example:
   25 10 220 4
 ```
 
-This tries a draw after 10 consecutive evaluated plies within ±25 cp, or a win
+This adjudicates a draw after 10 consecutive evaluated plies within ±25 cp, or a win
 after 4 consecutive evaluated plies favoring one side by at least 220 cp.
 
 The output includes:
@@ -102,13 +102,11 @@ Exclude runs with fewer than a specified number of parsed games:
 python3 plot_nelo.py --min-games 100000 -o adjudication.png < reader_output.txt
 ```
 
-Runs with exactly the threshold are included. Filtering occurs before grouping
-and sorting. With a positive threshold, every run must have a `Parsed N games.`
+With a positive threshold, every run must have a `Parsed N games.`
 line. The plotter reports an error if all runs are filtered out.
 
-The plotter treats a rule with a ply count of **99** as disabled when generating
-labels. The reader itself still uses the numerical count: 99 is a labeling
-convention, not a separate off switch in the C++ implementation.
+The plotter treats a rule with a ply count `>99` as disabled when generating
+labels.
 
 ## Compare multiple PGNs and alternative rules
 
