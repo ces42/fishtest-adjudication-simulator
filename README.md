@@ -41,7 +41,7 @@ such as:
 ## Running the reader
 
 ```text
-./reader FILE.pgn DRAW_CP DRAW_PLIES WIN_CP WIN_PLIES
+./reader FILE.pgn DRAW_CP DRAW_PLIES WIN_CP WIN_PLIES [twosided=false|true]
 ```
 
 | Argument | Meaning |
@@ -51,8 +51,17 @@ such as:
 | `DRAW_PLIES` | Consecutive evaluated plies needed to declare a draw |
 | `WIN_CP` | Evaluation magnitude, in centipawns, for a win/resignation |
 | `WIN_PLIES` | Consecutive evaluated plies favoring the same side needed to declare a win |
+| `twosided` | Optional, default `false`: require only the losing engine's evaluations for resignation. `true` requires both engines' evaluations, as in earlier versions. Bare `false` / `true` are also accepted. |
 
 Note that adjudication rules are typically formulated as "eval is at least X for Y **moves**", but this uses plies to allow for more flexibility.
+
+In one-sided mode, each qualifying losing-engine evaluation counts as two plies;
+the counter is reset when that engine's evaluation no longer meets the threshold.
+For example, `WIN_PLIES=6` requires three consecutive qualifying evaluations from
+the losing engine. Odd counts round up to the next losing-engine observation.
+Draw adjudication still checks both engines in either mode. Append `twosided=true`
+to reproduce the earlier behavior. The plotter includes the mode in rule labels;
+older saved output without a mode is interpreted as two-sided.
 
 For example:
 
@@ -122,7 +131,7 @@ Adjudication rules with ply counts `>= 99` are ignored by the plotter.
 
 
 
-# AI use
+# LLM use
 - `reader.cpp` is mostly hand-coded
 - `plot_nelo.py` is fully vibe-coded
 - this `README.md` is maybe 70% vibe-coded
